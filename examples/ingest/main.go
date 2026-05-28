@@ -1,10 +1,6 @@
 // Package main shows how to use this library as the ingest bone
 // of a live streaming engine.
 //
-// In a real system, the pipeline after OnPacket would be:
-//
-//	RTMP Ingest → Pipeline goroutine → Transcoder → Transmuxer → HLS/DASH origin
-//
 // This example wires the RTMP library to a per-stream pipeline with:
 //   - stream key validation
 //   - duplicate publish rejection
@@ -86,7 +82,7 @@ func (p *pipeline) send(pkt *rtmp.Packet) bool {
 		return true
 	default:
 		// Channel full. Downstream is too slow.
-		// Your policy: drop the packet, or return false to disconnect.
+		// Some policy: drop the packet, or return false to disconnect.
 		return false
 	}
 }
@@ -156,7 +152,7 @@ func (h *ingestHandler) OnConnect(s rtmp.Session, info rtmp.ConnectInfo) error {
 func (h *ingestHandler) OnPublish(s rtmp.Session, info rtmp.PublishInfo) error {
 	log.Printf("[ingest] publish id=%s key=%q", s.ID(), info.StreamKey)
 
-	// Step 1: validate stream key against your auth source.
+	// validate stream key against your auth source.
 	if !validKeys[info.StreamKey] {
 		log.Printf("[ingest] rejected: invalid key %q", info.StreamKey)
 		return &rtmp.RTMPError{
@@ -165,7 +161,7 @@ func (h *ingestHandler) OnPublish(s rtmp.Session, info rtmp.PublishInfo) error {
 		}
 	}
 
-	// Step 2: check for duplicate publish.
+	//  check for duplicate publish.
 	p, ok := h.reg.start(info.StreamKey)
 	if !ok {
 		log.Printf("[ingest] rejected: key %q already live", info.StreamKey)
