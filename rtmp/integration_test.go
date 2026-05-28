@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -443,5 +444,96 @@ func TestGracefulShutdown(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("listen and serve did not return after shutdown")
+	}
+}
+
+func TestIntegrationFFmpegHEVC(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not found")
+	}
+	
+	h := &recordingHandler{discCh: make(chan struct{})}
+	s, err := NewServer(Config{ListenAddr: "127.0.0.1:0"}, h)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.ListenAndServe()
+	}()
+	defer s.Shutdown(context.Background())
+	
+	addr := waitAddr(t, s, time.Second)
+
+	// Push HEVC via ERTMP
+	cmd := exec.Command("ffmpeg", "-y",
+		"-f", "lavfi", "-i", "testsrc=duration=1:size=160x120:rate=15",
+		"-c:v", "libx265", "-preset", "ultrafast",
+		"-bf", "2", // ensure b-frames to get composition time
+		"-f", "flv",
+		fmt.Sprintf("rtmp://%s/live/test", addr))
+	
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("ffmpeg hevc failed: %v\n%s", err, out)
+	}
+
+	// Push classic H.264
+	cmd2 := exec.Command("ffmpeg", "-y",
+		"-f", "lavfi", "-i", "testsrc=duration=1:size=160x120:rate=15",
+		"-c:v", "libx264", "-preset", "ultrafast",
+		"-f", "flv",
+		fmt.Sprintf("rtmp://%s/live/classic", addr))
+	
+	if out, err := cmd2.CombinedOutput(); err != nil {
+		t.Fatalf("ffmpeg avc failed: %v\n%s", err, out)
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	var gotHEVC, gotHEVCSeq, gotHEVCKey, gotHEVCBFrame bool
+	var gotAVC, gotAVCSeq bool
+
+	for _, p := range h.packets {
+		if p.Type == PacketTypeVideo {
+			if p.FourCC == FourCCHEVC {
+				gotHEVC = true
+				if p.IsSequenceHeader {
+					gotHEVCSeq = true
+				}
+				if p.IsKeyframe {
+					gotHEVCKey = true
+				}
+				if p.CompositionTime > 0 {
+					gotHEVCBFrame = true
+				}
+			}
+			if p.FourCC == FourCCAVC {
+				gotAVC = true
+				if p.IsSequenceHeader {
+					gotAVCSeq = true
+				}
+			}
+		}
+	}
+
+	if !gotHEVC {
+		t.Error("did not receive HEVC FourCC")
+	}
+	if !gotHEVCSeq {
+		t.Error("did not receive HEVC Sequence Header")
+	}
+	if !gotHEVCKey {
+		t.Error("did not receive HEVC Keyframe")
+	}
+	if !gotHEVCBFrame {
+		t.Log("Warning: did not receive CompositionTime > 0 for HEVC, ffmpeg might have skipped B-frames")
+	}
+	if !gotAVC {
+		t.Error("did not receive AVC FourCC")
+	}
+	if !gotAVCSeq {
+		t.Error("did not receive AVC Sequence Header")
 	}
 }

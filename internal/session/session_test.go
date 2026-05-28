@@ -141,7 +141,7 @@ func TestSessionConnectPublishMediaFlow(t *testing.T) {
 	if err := w.WriteMessage(6, 9, 1, 20, []byte{0x17, 0x00, 0x00, 0x00, 0x00, 0x01}); err != nil {
 		t.Fatalf("write video h264: %v", err)
 	}
-	if err := w.WriteMessage(6, 9, 1, 30, []byte{0x80, 0x01}); err != nil {
+	if err := w.WriteMessage(6, 9, 1, 30, []byte{0x90, 'h', 'v', 'c', '1'}); err != nil {
 		t.Fatalf("write video enhanced: %v", err)
 	}
 
@@ -180,17 +180,17 @@ func TestSessionConnectPublishMediaFlow(t *testing.T) {
 	}
 
 	a := h.pkts[0]
-	if a.Type != PacketTypeAudio || a.AudioCodec != AudioCodecAAC || !a.IsSequenceHeader {
+	if a.Type != PacketTypeAudio || a.AudioCodec != AudioCodecAAC || !a.IsSequenceHeader || a.FourCC != FourCCAAC || a.AudioPacketType != AudioPacketSequenceStart {
 		t.Fatalf("audio packet mismatch: %+v", a)
 	}
 
 	v := h.pkts[1]
-	if v.Type != PacketTypeVideo || v.VideoCodec != VideoCodecH264 || !v.IsSequenceHeader || !v.IsKeyframe {
+	if v.Type != PacketTypeVideo || v.VideoCodec != VideoCodecH264 || !v.IsSequenceHeader || !v.IsKeyframe || v.FourCC != FourCCAVC || v.VideoPacketType != VideoPacketSequenceStart {
 		t.Fatalf("video packet mismatch: %+v", v)
 	}
 
 	ev := h.pkts[2]
-	if ev.VideoCodec != VideoCodecEnhanced {
+	if ev.VideoCodec != VideoCodecEnhanced || ev.FourCC != FourCCHEVC || ev.VideoPacketType != VideoPacketSequenceStart {
 		t.Fatalf("enhanced packet mismatch: %+v", ev)
 	}
 

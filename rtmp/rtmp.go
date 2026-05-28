@@ -12,6 +12,68 @@ const (
 	PacketTypeVideo PacketType = 0x09
 )
 
+// FourCC is a four-character codec identifier per the E-RTMP spec.
+// Encoded big-endian: 'a','v','c','1' = 0x61766331.
+type FourCC uint32
+
+const (
+	FourCCNone FourCC = 0
+
+	// Video codecs.
+	FourCCAVC  FourCC = 'a'<<24 | 'v'<<16 | 'c'<<8 | '1'
+	FourCCHEVC FourCC = 'h'<<24 | 'v'<<16 | 'c'<<8 | '1'
+	FourCCAV1  FourCC = 'a'<<24 | 'v'<<16 | '0'<<8 | '1'
+	FourCCVP9  FourCC = 'v'<<24 | 'p'<<16 | '0'<<8 | '9'
+	FourCCVP8  FourCC = 'v'<<24 | 'p'<<16 | '0'<<8 | '8'
+	FourCCVVC  FourCC = 'v'<<24 | 'v'<<16 | 'c'<<8 | '1'
+
+	// Audio codecs.
+	FourCCAAC  FourCC = 'm'<<24 | 'p'<<16 | '4'<<8 | 'a'
+	FourCCOpus FourCC = 'O'<<24 | 'p'<<16 | 'u'<<8 | 's'
+	FourCCMP3  FourCC = '.'<<24 | 'm'<<16 | 'p'<<8 | '3'
+	FourCCFLAC FourCC = 'f'<<24 | 'L'<<16 | 'a'<<8 | 'C'
+	FourCCAC3  FourCC = 'a'<<24 | 'c'<<16 | '-'<<8 | '3'
+	FourCCEAC3 FourCC = 'e'<<24 | 'c'<<16 | '-'<<8 | '3'
+)
+
+// String returns the four ASCII characters of the FourCC.
+func (f FourCC) String() string {
+	if f == FourCCNone {
+		return "none"
+	}
+	b := [4]byte{byte(f >> 24), byte(f >> 16), byte(f >> 8), byte(f)}
+	return string(b[:])
+}
+
+// VideoPacketType identifies the kind of enhanced video packet.
+// Values match the E-RTMP spec ExVideoTagHeader enum.
+type VideoPacketType uint8
+
+const (
+	VideoPacketSequenceStart   VideoPacketType = 0
+	VideoPacketCodedFrames     VideoPacketType = 1
+	VideoPacketSequenceEnd     VideoPacketType = 2
+	VideoPacketCodedFramesX    VideoPacketType = 3 // composition time implied zero
+	VideoPacketMetadata        VideoPacketType = 4
+	VideoPacketMPEG2TSSeqStart VideoPacketType = 5
+	VideoPacketMultitrack      VideoPacketType = 6
+	VideoPacketModEx           VideoPacketType = 7
+)
+
+// AudioPacketType identifies the kind of enhanced audio packet.
+// Values match the E-RTMP spec ExAudioTagHeader enum.
+type AudioPacketType uint8
+
+const (
+	AudioPacketSequenceStart      AudioPacketType = 0
+	AudioPacketCodedFrames        AudioPacketType = 1
+	AudioPacketSequenceEnd        AudioPacketType = 2
+	AudioPacketMultichannelConfig AudioPacketType = 4
+	AudioPacketMultitrack         AudioPacketType = 5
+	AudioPacketModEx              AudioPacketType = 7
+)
+
+// Deprecated: use FourCC instead for both classic and enhanced tags.
 type VideoCodec uint8
 
 const (
@@ -19,6 +81,7 @@ const (
 	VideoCodecEnhanced VideoCodec = 0xFF
 )
 
+// Deprecated: use FourCC instead for both classic and enhanced tags.
 type AudioCodec uint8
 
 const (
@@ -26,16 +89,26 @@ const (
 	AudioCodecMP3 AudioCodec = 0x02
 )
 
+// Packet is the public media packet delivered via Handler.OnPacket.
+// FourCC is always set for both classic and enhanced tags.
+// VideoPacketType / AudioPacketType are only valid for enhanced tags.
 type Packet struct {
 	Type             PacketType
-	AudioCodec       AudioCodec
-	VideoCodec       VideoCodec
+	FourCC           FourCC
+	VideoPacketType  VideoPacketType // valid when Type == Video && IsEnhanced
+	AudioPacketType  AudioPacketType // valid when Type == Audio && IsEnhanced
 	IsSequenceHeader bool
 	IsKeyframe       bool
+	IsEnhanced       bool // true when parsed from an enhanced tag
 	Timestamp        uint32
 	CompositionTime  int32
 	StreamID         uint32
 	Payload          []byte
+
+	// Deprecated: use FourCC.
+	AudioCodec AudioCodec
+	// Deprecated: use FourCC.
+	VideoCodec VideoCodec
 }
 
 func (p *Packet) Clone() *Packet {
@@ -59,6 +132,8 @@ type ConnectInfo struct {
 	SWFURL         string
 	TCURL          string
 	ObjectEncoding int
+	EnhancedRTMP   bool     // true if publisher advertised E-RTMP support
+	FourCCList     []FourCC // codecs advertised in connect fourCcList
 }
 
 type PublishInfo struct {

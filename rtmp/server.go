@@ -164,12 +164,21 @@ type sessionHandler struct {
 }
 
 func (a sessionHandler) OnConnect(sess *session.Session, info session.ConnectInfo) error {
+	var fcc []FourCC
+	if len(info.FourCCList) > 0 {
+		fcc = make([]FourCC, len(info.FourCCList))
+		for i, v := range info.FourCCList {
+			fcc[i] = FourCC(v)
+		}
+	}
 	return a.h.OnConnect(sess, ConnectInfo{
 		App:            info.App,
 		FlashVer:       info.FlashVer,
 		SWFURL:         info.SWFURL,
 		TCURL:          info.TCURL,
 		ObjectEncoding: info.ObjectEncoding,
+		EnhancedRTMP:   info.EnhancedRTMP,
+		FourCCList:     fcc,
 	})
 }
 
@@ -200,14 +209,18 @@ func (a sessionHandler) OnMetadata(sess *session.Session, meta session.Metadata)
 func (a sessionHandler) OnPacket(sess *session.Session, pkt *session.Packet) {
 	a.h.OnPacket(sess, &Packet{
 		Type:             PacketType(pkt.Type),
-		AudioCodec:       AudioCodec(pkt.AudioCodec),
-		VideoCodec:       VideoCodec(pkt.VideoCodec),
+		FourCC:           FourCC(pkt.FourCC),
+		VideoPacketType:  VideoPacketType(pkt.VideoPacketType),
+		AudioPacketType:  AudioPacketType(pkt.AudioPacketType),
 		IsSequenceHeader: pkt.IsSequenceHeader,
 		IsKeyframe:       pkt.IsKeyframe,
+		IsEnhanced:       pkt.IsEnhanced,
 		Timestamp:        pkt.Timestamp,
 		CompositionTime:  pkt.CompositionTime,
 		StreamID:         pkt.StreamID,
 		Payload:          pkt.Payload,
+		AudioCodec:       AudioCodec(pkt.AudioCodec),
+		VideoCodec:       VideoCodec(pkt.VideoCodec),
 	})
 }
 

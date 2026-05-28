@@ -147,7 +147,7 @@ srv, err := rtmp.NewServer(rtmp.Config{
 - Data messages: @setDataFrame / onMetaData
 - Audio (type 8): AAC, MP3
 - Video (type 9): H.264 with full FLV tag parsing (keyframe, sequence header, CTS)
-- Enhanced RTMP: detected and passed through as raw payload (not deeply parsed)
+- Enhanced RTMP (v2): Full zero-allocation parsing for modern codecs (HEVC, AV1, VP9, Opus). Extracts `FourCC`, packet types, and composition times. Tag envelopes are automatically stripped from payloads.
 
 ## What It Does Not Do
 

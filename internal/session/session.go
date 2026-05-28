@@ -28,6 +28,48 @@ const (
 	PacketTypeVideo PacketType = 0x09
 )
 
+type FourCC uint32
+
+const (
+	FourCCNone FourCC = 0
+	FourCCAVC  FourCC = 'a'<<24 | 'v'<<16 | 'c'<<8 | '1'
+	FourCCHEVC FourCC = 'h'<<24 | 'v'<<16 | 'c'<<8 | '1'
+	FourCCAV1  FourCC = 'a'<<24 | 'v'<<16 | '0'<<8 | '1'
+	FourCCVP9  FourCC = 'v'<<24 | 'p'<<16 | '0'<<8 | '9'
+	FourCCVP8  FourCC = 'v'<<24 | 'p'<<16 | '0'<<8 | '8'
+	FourCCVVC  FourCC = 'v'<<24 | 'v'<<16 | 'c'<<8 | '1'
+	FourCCAAC  FourCC = 'm'<<24 | 'p'<<16 | '4'<<8 | 'a'
+	FourCCOpus FourCC = 'O'<<24 | 'p'<<16 | 'u'<<8 | 's'
+	FourCCMP3  FourCC = '.'<<24 | 'm'<<16 | 'p'<<8 | '3'
+	FourCCFLAC FourCC = 'f'<<24 | 'L'<<16 | 'a'<<8 | 'C'
+	FourCCAC3  FourCC = 'a'<<24 | 'c'<<16 | '-'<<8 | '3'
+	FourCCEAC3 FourCC = 'e'<<24 | 'c'<<16 | '-'<<8 | '3'
+)
+
+type VideoPacketType uint8
+
+const (
+	VideoPacketSequenceStart   VideoPacketType = 0
+	VideoPacketCodedFrames     VideoPacketType = 1
+	VideoPacketSequenceEnd     VideoPacketType = 2
+	VideoPacketCodedFramesX    VideoPacketType = 3
+	VideoPacketMetadata        VideoPacketType = 4
+	VideoPacketMPEG2TSSeqStart VideoPacketType = 5
+	VideoPacketMultitrack      VideoPacketType = 6
+	VideoPacketModEx           VideoPacketType = 7
+)
+
+type AudioPacketType uint8
+
+const (
+	AudioPacketSequenceStart      AudioPacketType = 0
+	AudioPacketCodedFrames        AudioPacketType = 1
+	AudioPacketSequenceEnd        AudioPacketType = 2
+	AudioPacketMultichannelConfig AudioPacketType = 4
+	AudioPacketMultitrack         AudioPacketType = 5
+	AudioPacketModEx              AudioPacketType = 7
+)
+
 type VideoCodec uint8
 
 const (
@@ -43,15 +85,19 @@ const (
 )
 
 type Packet struct {
-	Type             PacketType
-	AudioCodec       AudioCodec
-	VideoCodec       VideoCodec
+	Type            PacketType
+	FourCC          FourCC
+	VideoPacketType VideoPacketType
+	AudioPacketType AudioPacketType
 	IsSequenceHeader bool
 	IsKeyframe       bool
+	IsEnhanced       bool
 	Timestamp        uint32
 	CompositionTime  int32
 	StreamID         uint32
 	Payload          []byte
+	AudioCodec       AudioCodec
+	VideoCodec       VideoCodec
 }
 
 type ConnectInfo struct {
@@ -60,6 +106,8 @@ type ConnectInfo struct {
 	SWFURL         string
 	TCURL          string
 	ObjectEncoding int
+	EnhancedRTMP   bool
+	FourCCList     []FourCC
 }
 
 type PublishInfo struct {
@@ -430,6 +478,22 @@ func (s *Session) handleConnect(tx float64, vs []any) error {
 		TCURL:          asStr(obj["tcUrl"]),
 		ObjectEncoding: int(asNum(obj["objectEncoding"])),
 	}
+
+	// E-RTMP: parse fourCcList from connect object.
+	// OBS 30+ and ffmpeg send this to advertise codec support.
+	if raw, ok := obj["fourCcList"]; ok {
+		if arr, ok := raw.([]any); ok && len(arr) > 0 {
+			info.EnhancedRTMP = true
+			for _, v := range arr {
+				str, ok := v.(string)
+				if !ok || len(str) != 4 {
+					continue
+				}
+				fc := FourCC(str[0])<<24 | FourCC(str[1])<<16 | FourCC(str[2])<<8 | FourCC(str[3])
+				info.FourCCList = append(info.FourCCList, fc)
+			}
+		}
+	}
 	if info.TCURL == "" {
 		info.TCURL = asStr(obj["tcurl"])
 	}
@@ -561,13 +625,40 @@ func (s *Session) handleAudio(msg *message.RawMessage) error {
 	}
 
 	c := AudioCodec(msg.Payload[0] >> 4)
+	if c == 9 {
+		pk, err := parseEnhancedAudio(msg.Payload)
+		if err != nil {
+			return err
+		}
+		pk.Timestamp = msg.Timestamp
+		pk.StreamID = msg.StreamID
+		pk.AudioCodec = 9
+
+		s.dbg("audio packet enhanced fourcc=%s ts=%d size=%d", pk.FourCC, msg.Timestamp, len(msg.Payload))
+		s.h.OnPacket(s, &pk)
+		return nil
+	}
+
 	sh := false
 	if c == AudioCodecAAC && len(msg.Payload) >= 2 {
 		sh = msg.Payload[1] == 0
 	}
 
+	fcc := FourCCNone
+	apt := AudioPacketCodedFrames
+	if c == AudioCodecAAC {
+		fcc = FourCCAAC
+		if sh {
+			apt = AudioPacketSequenceStart
+		}
+	} else if c == AudioCodecMP3 {
+		fcc = FourCCMP3
+	}
+
 	pk := &Packet{
 		Type:             PacketTypeAudio,
+		FourCC:           fcc,
+		AudioPacketType:  apt,
 		AudioCodec:       c,
 		IsSequenceHeader: sh,
 		Timestamp:        msg.Timestamp,
@@ -589,15 +680,16 @@ func (s *Session) handleVideo(msg *message.RawMessage) error {
 
 	b0 := msg.Payload[0]
 	if b0&0x80 != 0 {
-		pk := &Packet{
-			Type:       PacketTypeVideo,
-			VideoCodec: VideoCodecEnhanced,
-			Timestamp:  msg.Timestamp,
-			StreamID:   msg.StreamID,
-			Payload:    msg.Payload,
+		pk, err := parseEnhancedVideo(msg.Payload)
+		if err != nil {
+			return err
 		}
-		s.dbg("video packet enhanced codec ts=%d size=%d", msg.Timestamp, len(msg.Payload))
-		s.h.OnPacket(s, pk)
+		pk.Timestamp = msg.Timestamp
+		pk.StreamID = msg.StreamID
+		pk.VideoCodec = VideoCodecEnhanced
+
+		s.dbg("video packet enhanced fourcc=%s ts=%d size=%d", pk.FourCC, msg.Timestamp, len(msg.Payload))
+		s.h.OnPacket(s, &pk)
 		return nil
 	}
 
@@ -618,8 +710,19 @@ func (s *Session) handleVideo(msg *message.RawMessage) error {
 		}
 	}
 
+	fcc := FourCCNone
+	vpt := VideoPacketCodedFrames
+	if vc == VideoCodecH264 {
+		fcc = FourCCAVC
+		if sh {
+			vpt = VideoPacketSequenceStart
+		}
+	}
+
 	pk := &Packet{
 		Type:             PacketTypeVideo,
+		FourCC:           fcc,
+		VideoPacketType:  vpt,
 		VideoCodec:       vc,
 		IsSequenceHeader: sh,
 		IsKeyframe:       kf,
