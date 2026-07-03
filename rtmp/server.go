@@ -104,6 +104,26 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 }
 
+func (s *Server) CloseByStreamKey(key string) int {
+	if key == "" {
+		return 0
+	}
+	closed := 0
+	s.ss.Range(func(_, v any) bool {
+		ss, ok := v.(*session.Session)
+		if !ok {
+			return true
+		}
+		if ss.StreamKey() == key {
+			if err := ss.Close(); err == nil {
+				closed++
+			}
+		}
+		return true
+	})
+	return closed
+}
+
 func (s *Server) runSession(cn net.Conn) {
 	err := handshake.DoServer(cn, s.cfg.HandshakeTimeout)
 	if err != nil {

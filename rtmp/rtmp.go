@@ -13,7 +13,7 @@ const (
 )
 
 // FourCC is a four-character codec identifier per the E-RTMP spec.
-// Encoded big-endian: 'a','v','c','1' = 0x61766331.
+// Encoded big-endian: 'a','v','c','1' -> 0x61766331.
 type FourCC uint32
 
 const (

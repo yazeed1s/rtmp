@@ -11,7 +11,7 @@ import (
 // Wire format:
 //
 //	byte 0: [audioCodecID:4][audioPacketType:4]
-//	         when audioCodecID == 9 it's enhanced audio
+//	         when audioCodecID == 9 -> enhanced audio
 //
 //	After optional ModEx chain:
 //	  bytes N..N+3: FourCC (big-endian ASCII)
@@ -100,7 +100,7 @@ func parseMultitrackAudio(buf []byte, off int, pkt Packet) (Packet, error) {
 	mt := (buf[off] >> 4) & 0x0F
 	off++
 
-	// ManyTracksManyCodecs = 2 -> per-track FourCC
+	// ManyTracksManyCodecs = 2 -> per-track FourCC, no shared value.
 	if mt != 2 && off+4 <= len(buf) {
 		pkt.FourCC = FourCC(binary.BigEndian.Uint32(buf[off:]))
 	}

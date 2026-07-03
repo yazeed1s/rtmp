@@ -85,10 +85,10 @@ const (
 )
 
 type Packet struct {
-	Type            PacketType
-	FourCC          FourCC
-	VideoPacketType VideoPacketType
-	AudioPacketType AudioPacketType
+	Type             PacketType
+	FourCC           FourCC
+	VideoPacketType  VideoPacketType
+	AudioPacketType  AudioPacketType
 	IsSequenceHeader bool
 	IsKeyframe       bool
 	IsEnhanced       bool
@@ -640,8 +640,12 @@ func (s *Session) handleAudio(msg *message.RawMessage) error {
 	}
 
 	sh := false
+	payload := msg.Payload
 	if c == AudioCodecAAC && len(msg.Payload) >= 2 {
 		sh = msg.Payload[1] == 0
+		payload = msg.Payload[2:]
+	} else if len(msg.Payload) >= 1 {
+		payload = msg.Payload[1:]
 	}
 
 	fcc := FourCCNone
@@ -663,9 +667,9 @@ func (s *Session) handleAudio(msg *message.RawMessage) error {
 		IsSequenceHeader: sh,
 		Timestamp:        msg.Timestamp,
 		StreamID:         msg.StreamID,
-		Payload:          msg.Payload,
+		Payload:          payload,
 	}
-	s.dbg("audio packet codec=0x%X seq_header=%t ts=%d size=%d", c, sh, msg.Timestamp, len(msg.Payload))
+	s.dbg("audio packet codec=0x%X seq_header=%t ts=%d size=%d", c, sh, msg.Timestamp, len(payload))
 	s.h.OnPacket(s, pk)
 	return nil
 }
@@ -699,6 +703,7 @@ func (s *Session) handleVideo(msg *message.RawMessage) error {
 	sh := false
 	ct := int32(0)
 
+	payload := msg.Payload
 	if vc == VideoCodecH264 && len(msg.Payload) >= 5 {
 		sh = msg.Payload[1] == 0
 		u := uint32(msg.Payload[2])<<16 | uint32(msg.Payload[3])<<8 | uint32(msg.Payload[4])
@@ -708,6 +713,9 @@ func (s *Session) handleVideo(msg *message.RawMessage) error {
 		if ct&0x00800000 != 0 {
 			ct |= ^int32(0x00FFFFFF)
 		}
+		payload = msg.Payload[5:]
+	} else if len(msg.Payload) >= 1 {
+		payload = msg.Payload[1:]
 	}
 
 	fcc := FourCCNone
@@ -729,10 +737,10 @@ func (s *Session) handleVideo(msg *message.RawMessage) error {
 		Timestamp:        msg.Timestamp,
 		CompositionTime:  ct,
 		StreamID:         msg.StreamID,
-		Payload:          msg.Payload,
+		Payload:          payload,
 	}
 	s.dbg("video packet codec=0x%X keyframe=%t seq_header=%t ts=%d cts=%d size=%d",
-		vc, kf, sh, msg.Timestamp, ct, len(msg.Payload))
+		vc, kf, sh, msg.Timestamp, ct, len(payload))
 	s.h.OnPacket(s, pk)
 	return nil
 }

@@ -142,7 +142,6 @@ func parseMultitrackVideo(buf []byte, off int, ft uint8, pkt Packet) (Packet, er
 	}
 
 	// Expose raw multitrack body. Full track iteration is not
-	// done here, prism or the handler can parse if needed.
 	pkt.Payload = buf[off:]
 	return pkt, nil
 }
