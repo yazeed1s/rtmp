@@ -1,24 +1,23 @@
 package session
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/yazeed1s/rtmp/internal/fuzzbound"
+)
 
 func FuzzParseEnhancedVideo(f *testing.F) {
-	f.Add([]byte{0x90, 'h', 'v', 'c', '1', 0x01, 0x02, 0x03})
-	f.Add([]byte{0x91, 'a', 'v', '0', '1', 0x00, 0x00, 0x10, 0x99})
-	f.Add([]byte{0x92, 'a', 'v', 'c', '1'})
-	f.Fuzz(func(t *testing.T, data []byte) {
-		// Just ensure it doesn't panic on malformed input
-		_, _ = parseEnhancedVideo(data)
+	f.Add([]byte{0x90, 'h', 'v', 'c', '1', 1, 2, 3})
+	f.Add([]byte{0x96, 0x00, 'a', 'v', 'c', '1', 0, 0, 0, 3, 1, 2, 3})
+	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzbound.Check(t, b, func() { _, _ = parseEnhancedVideo(b) })
 	})
 }
 
 func FuzzParseEnhancedAudio(f *testing.F) {
-	f.Add([]byte{0x90, 'O', 'p', 'u', 's', 0x00, 0x00})
-	f.Add([]byte{0x91, 'O', 'p', 'u', 's', 0x11, 0x22})
-	f.Fuzz(func(t *testing.T, data []byte) {
-		// Just ensure it doesn't panic on malformed input
-		if len(data) > 0 && (data[0]>>4)&0x0F == 9 {
-			_, _ = parseEnhancedAudio(data)
-		}
+	f.Add([]byte{0x90, 'O', 'p', 'u', 's', 1, 2})
+	f.Add([]byte{0x95, 0x00, 'O', 'p', 'u', 's', 0, 0, 1, 9})
+	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzbound.Check(t, b, func() { _, _ = parseEnhancedAudio(b) })
 	})
 }

@@ -61,7 +61,7 @@ func parseEnhancedVideo(buf []byte) (Packet, error) {
 
 	pkt.VideoPacketType = pt
 
-	// Command frame?
+	// Command frame: no FourCC, no body.
 	if pt != VideoPacketMetadata && ft == 5 {
 		if off < len(buf) {
 			pkt.Payload = buf[off:]
@@ -69,12 +69,12 @@ func parseEnhancedVideo(buf []byte) (Packet, error) {
 		return pkt, nil
 	}
 
-	// Multitrack own header layout with inner packetType + FourCC.
+	// Multitrack: own header layout with inner packetType + FourCC.
 	if pt == VideoPacketMultitrack {
 		return parseMultitrackVideo(buf, off, ft, pkt)
 	}
 
-	// Regular enhanced read FourCC.
+	// Regular enhanced: read FourCC.
 	if off+4 > len(buf) {
 		return pkt, fmt.Errorf("enhanced video: fourcc truncated")
 	}
@@ -136,12 +136,13 @@ func parseMultitrackVideo(buf []byte, off int, ft uint8, pkt Packet) (Packet, er
 	mt := (buf[off] >> 4) & 0x0F // AvMultitrackType
 	off++
 
-	// ManyTracksManyCodecs = 2 → per-track FourCC
+	// ManyTracksManyCodecs = 2 → per-track FourCC, no shared value.
 	if mt != 2 && off+4 <= len(buf) {
 		pkt.FourCC = FourCC(binary.BigEndian.Uint32(buf[off:]))
 	}
 
 	// Expose raw multitrack body. Full track iteration is not
+	// done here; the handler can parse if needed.
 	pkt.Payload = buf[off:]
 	return pkt, nil
 }

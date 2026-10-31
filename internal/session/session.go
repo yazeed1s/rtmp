@@ -238,7 +238,7 @@ func New(cn net.Conn, cf Config, h Handler) *Session {
 
 func (s *Session) Run() {
 	s.inf("run start remote=%s", s.cn.RemoteAddr())
-	err := s.runLoop()
+	err := s.safeRunLoop()
 	rawErr := err
 	if errors.Is(err, io.EOF) || errors.Is(err, errPeerClosed) || isClosedNetErr(err) {
 		s.dbg("run loop closed by peer: %v", err)
@@ -257,6 +257,20 @@ func (s *Session) Run() {
 		s.inf("run stop normal close")
 	}
 	s.h.OnDisconnect(s, err)
+}
+
+// safeRunLoop turns a panic from parsing one connection's input into an error
+// for that connection. A parser bug must close one publisher, not kill every
+// broadcast in the process. Run still calls OnDisconnect afterwards, so
+// ownership is released through the normal path.
+func (s *Session) safeRunLoop() (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("session panic: %v", r)
+			_ = s.cn.Close()
+		}
+	}()
+	return s.runLoop()
 }
 
 // runLoop is the main event loop, everything runs in this one single goroutine.
@@ -704,8 +718,17 @@ func (s *Session) handleVideo(msg *message.RawMessage) error {
 	ct := int32(0)
 
 	payload := msg.Payload
+	vpt := VideoPacketCodedFrames
 	if vc == VideoCodecH264 && len(msg.Payload) >= 5 {
-		sh = msg.Payload[1] == 0
+		// AVCPacketType: 0 sequence header, 1 NALUs, 2 end of sequence. An
+		// end of sequence carries no media and must never become a frame.
+		switch msg.Payload[1] {
+		case 0:
+			sh = true
+			vpt = VideoPacketSequenceStart
+		case 2:
+			vpt = VideoPacketSequenceEnd
+		}
 		u := uint32(msg.Payload[2])<<16 | uint32(msg.Payload[3])<<8 | uint32(msg.Payload[4])
 		ct = int32(u)
 		// Composition time in AVC packet is signed 24-bit.
@@ -719,12 +742,12 @@ func (s *Session) handleVideo(msg *message.RawMessage) error {
 	}
 
 	fcc := FourCCNone
-	vpt := VideoPacketCodedFrames
 	if vc == VideoCodecH264 {
 		fcc = FourCCAVC
-		if sh {
-			vpt = VideoPacketSequenceStart
-		}
+	}
+	// frame type 5 is a video info/command frame, not a picture.
+	if ft == 5 {
+		vpt = VideoPacketMetadata
 	}
 
 	pk := &Packet{
