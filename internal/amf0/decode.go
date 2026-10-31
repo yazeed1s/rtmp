@@ -17,9 +17,15 @@ const (
 	markerStrictArray byte = 0x0A
 )
 
+// maxDepth bounds nested objects and arrays. RTMP commands nest two or three
+// levels; without a bound, one 4 MiB message can recurse deep enough to
+// overflow the goroutine stack, which kills the whole process.
+const maxDepth = 32
+
 type decoder struct {
-	data []byte
-	pos  int
+	data  []byte
+	pos   int
+	depth int
 }
 
 // Decode reads AMF0 values from a byte slice.
@@ -78,7 +84,7 @@ func readValue(d *decoder) (any, error) {
 
 	case markerObject:
 		// AMF0 Object is key/value pairs, closed by 0x00 0x00 0x09.
-		return readObject(d)
+		return readNested(d, readObject)
 
 	case markerNull:
 		// In Go side we map both null and undefined as nil for this v1 parser.
@@ -94,7 +100,7 @@ func readValue(d *decoder) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return readObject(d)
+		return readNested(d, readObject)
 
 	case markerStrictArray:
 		// StrictArray has exact count. We decode exactly N values in order.
@@ -108,19 +114,35 @@ func readValue(d *decoder) (any, error) {
 		if n > uint32(rm) {
 			return nil, fmt.Errorf("amf0: strict array too large: count=%d remaining=%d", n, rm)
 		}
-		a := make([]any, 0, int(n))
-		for i := uint32(0); i < n; i++ {
-			v, err := readValue(d)
-			if err != nil {
-				return nil, err
+		return readNested(d, func(d *decoder) ([]any, error) {
+			a := make([]any, 0, int(n))
+			for i := uint32(0); i < n; i++ {
+				v, err := readValue(d)
+				if err != nil {
+					return nil, err
+				}
+				a = append(a, v)
 			}
-			a = append(a, v)
-		}
-		return a, nil
+			return a, nil
+		})
 
 	default:
 		return nil, fmt.Errorf("amf0: unsupported type 0x%02x", m)
 	}
+}
+
+func readNested[T any](d *decoder, fn func(*decoder) (T, error)) (any, error) {
+	if d.depth >= maxDepth {
+		var zero T
+		return zero, fmt.Errorf("amf0: nesting deeper than %d", maxDepth)
+	}
+	d.depth++
+	v, err := fn(d)
+	d.depth--
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
 }
 
 func readObject(d *decoder) (map[string]any, error) {

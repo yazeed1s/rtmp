@@ -402,3 +402,24 @@ func TestEncodeUnsupported(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestDecodeRejectsDeepNesting(t *testing.T) {
+	// one strict array of one element, nested far past the limit.
+	var b []byte
+	for i := 0; i < 100_000; i++ {
+		b = append(b, markerStrictArray, 0, 0, 0, 1)
+	}
+	b = append(b, markerNull)
+	if _, err := Decode(b); err == nil {
+		t.Fatal("deep nesting was accepted")
+	}
+}
+
+func FuzzDecode(f *testing.F) {
+	f.Add([]byte{markerString, 0, 7, 'c', 'o', 'n', 'n', 'e', 'c', 't', markerNumber, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0})
+	f.Add([]byte{markerObject, 0, 3, 'a', 'p', 'p', markerString, 0, 4, 'l', 'i', 'v', 'e', 0, 0, markerObjectEnd})
+	f.Add([]byte{markerStrictArray, 0, 0, 0, 2, markerNull, markerBoolean, 1})
+	f.Fuzz(func(t *testing.T, b []byte) {
+		_, _ = Decode(b)
+	})
+}
