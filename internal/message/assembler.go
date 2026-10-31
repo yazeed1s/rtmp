@@ -39,21 +39,37 @@ type messageBuffer struct {
 	tl uint32
 }
 
+// initialMessageCap is the first buffer size for a new message. Most RTMP
+// messages are smaller; bigger ones double up to their declared length.
+const initialMessageCap = 64 << 10
+
+// mbPool holds the small message-buffer headers. It is shared by every
+// assembler: a sync.Pool per assembler registers a new pool with the runtime
+// each time, and pools (with what they hold) live for two GC cycles, so many
+// short-lived assemblers pile up memory.
+var mbPool = sync.Pool{New: func() any { return &messageBuffer{} }}
+
 type Assembler struct {
 	p   *pool.Pool
 	bf  map[uint32]*messageBuffer
 	mxs int
-	mbp sync.Pool
+	// open is the bytes reserved by unfinished messages on all chunk
+	// streams. Each new message reserves its full declared length, so
+	// without this cap one connection could open a partial message on
+	// thousands of chunk stream ids and reserve gigabytes.
+	open    int
+	maxOpen int
 }
 
 func NewAssembler(p *pool.Pool, mx int) *Assembler {
 	a := &Assembler{
-		p:   p,
-		bf:  make(map[uint32]*messageBuffer),
-		mxs: mx,
+		p:       p,
+		bf:      make(map[uint32]*messageBuffer),
+		mxs:     mx,
+		maxOpen: 2 * mx,
 	}
-	a.mbp.New = func() any {
-		return &messageBuffer{}
+	if a.maxOpen <= 0 {
+		a.maxOpen = 8 << 20
 	}
 	return a
 }
@@ -79,38 +95,44 @@ func (a *Assembler) feedRead(h chunk.ChunkHeader, n uint32, rd func([]byte) erro
 	// New message can start before old one is complete, so we drop old partial bytes and start fresh.
 	if h.IsNewMessage || b == nil {
 		if b != nil {
+			a.open -= int(b.tl)
 			a.rel(b)
+			delete(a.bf, h.CSID)
 		}
 
 		if a.mxs > 0 && int(h.MessageLength) > a.mxs {
 			return nil, ErrMessageTooLarge
 		}
+		if a.open+int(h.MessageLength) > a.maxOpen {
+			return nil, fmt.Errorf("%w: %d bytes already reserved by unfinished messages", ErrMessageTooLarge, a.open)
+		}
+		a.open += int(h.MessageLength)
 
 		b = a.getMB()
 		b.ti = h.MessageTypeID
 		b.si = h.MessageStreamID
 		b.ts = h.Timestamp
-		b.dt = a.p.Get(int(h.MessageLength))
+		// start small and grow as bytes arrive. Allocating the declared
+		// length up front let a few header bytes force megabytes of
+		// allocation.
+		b.dt = a.p.Get(min(int(h.MessageLength), initialMessageCap))
 		b.tl = h.MessageLength
 		a.bf[h.CSID] = b
 	}
 
 	if b.tl == 0 {
-		a.rel(b)
-		delete(a.bf, h.CSID)
+		a.drop(h.CSID, b)
 		return nil, fmt.Errorf("%w: zero message length", ErrBadChunkHeader)
 	}
 
 	if b.rc+n > b.tl {
-		a.rel(b)
-		delete(a.bf, h.CSID)
+		a.drop(h.CSID, b)
 		return nil, fmt.Errorf("%w: chunk exceeds message length: got=%d total=%d", ErrBadChunkHeader, b.rc+n, b.tl)
 	}
 
 	// We check growing size too. This is safety even if header total looked valid.
 	if a.mxs > 0 && int(b.rc+n) > a.mxs {
-		a.rel(b)
-		delete(a.bf, h.CSID)
+		a.drop(h.CSID, b)
 		return nil, ErrMessageTooLarge
 	}
 
@@ -119,6 +141,14 @@ func (a *Assembler) feedRead(h chunk.ChunkHeader, n uint32, rd func([]byte) erro
 	// - reader writes chunk bytes directly into writable window
 	st := int(b.rc)
 	ed := st + int(n)
+	if cap(b.dt) < ed {
+		nc := max(ed, 2*cap(b.dt))
+		nc = min(nc, int(b.tl))
+		nb := make([]byte, st, nc)
+		copy(nb, b.dt[:st])
+		a.p.Put(b.dt)
+		b.dt = nb
+	}
 	b.dt = b.dt[:ed]
 	if err := rd(b.dt[st:ed]); err != nil {
 		// Keep buffer state valid when read fails.
@@ -139,9 +169,17 @@ func (a *Assembler) feedRead(h chunk.ChunkHeader, n uint32, rd func([]byte) erro
 		p:         a.p,
 	}
 	delete(a.bf, h.CSID)
+	a.open -= int(b.tl)
 	b.dt = nil
 	a.putMB(b)
 	return m, nil
+}
+
+// drop forgets an unfinished message and returns its reservation.
+func (a *Assembler) drop(csid uint32, b *messageBuffer) {
+	a.open -= int(b.tl)
+	a.rel(b)
+	delete(a.bf, csid)
 }
 
 func (a *Assembler) Discard(csid uint32) {
@@ -149,8 +187,7 @@ func (a *Assembler) Discard(csid uint32) {
 	if b == nil {
 		return
 	}
-	a.rel(b)
-	delete(a.bf, csid)
+	a.drop(csid, b)
 }
 
 func (a *Assembler) rel(b *messageBuffer) {
@@ -163,7 +200,7 @@ func (a *Assembler) rel(b *messageBuffer) {
 }
 
 func (a *Assembler) getMB() *messageBuffer {
-	v := a.mbp.Get()
+	v := mbPool.Get()
 	if v == nil {
 		return &messageBuffer{}
 	}
@@ -179,5 +216,5 @@ func (a *Assembler) putMB(b *messageBuffer) {
 		return
 	}
 	*b = messageBuffer{}
-	a.mbp.Put(b)
+	mbPool.Put(b)
 }
