@@ -451,19 +451,19 @@ func TestIntegrationFFmpegHEVC(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not found")
 	}
-	
+
 	h := &recordingHandler{discCh: make(chan struct{})}
 	s, err := NewServer(Config{ListenAddr: "127.0.0.1:0"}, h)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
-	
+
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- s.ListenAndServe()
 	}()
 	defer s.Shutdown(context.Background())
-	
+
 	addr := waitAddr(t, s, time.Second)
 
 	// Push HEVC via ERTMP
@@ -473,7 +473,7 @@ func TestIntegrationFFmpegHEVC(t *testing.T) {
 		"-bf", "2", // ensure b-frames to get composition time
 		"-f", "flv",
 		fmt.Sprintf("rtmp://%s/live/test", addr))
-	
+
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("ffmpeg hevc failed: %v\n%s", err, out)
 	}
@@ -484,7 +484,7 @@ func TestIntegrationFFmpegHEVC(t *testing.T) {
 		"-c:v", "libx264", "-preset", "ultrafast",
 		"-f", "flv",
 		fmt.Sprintf("rtmp://%s/live/classic", addr))
-	
+
 	if out, err := cmd2.CombinedOutput(); err != nil {
 		t.Fatalf("ffmpeg avc failed: %v\n%s", err, out)
 	}

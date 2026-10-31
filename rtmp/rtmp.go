@@ -178,9 +178,13 @@ type Config struct {
 	WriteTimeout     time.Duration
 	MaxChunkSize     int
 	MaxMessageSize   int
-	ReadBufSize      int
-	WriteBufSize     int
-	Logger           Logger
+	// ConnectionsPerIPPerMinute limits new connections from one address.
+	// Zero disables the limit. ConnectionBurstPerIP is the bucket size.
+	ConnectionsPerIPPerMinute int
+	ConnectionBurstPerIP      int
+	ReadBufSize               int
+	WriteBufSize              int
+	Logger                    Logger
 }
 
 func defaultConfig() Config {

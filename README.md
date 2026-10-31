@@ -94,6 +94,8 @@ All fields are optional. Defaults are applied if you leave them zero.
 | `WriteTimeout` | `5s` | Timeout for writing responses |
 | `MaxChunkSize` | `65536` | Max chunk size we accept from publisher |
 | `MaxMessageSize` | `4MB` | Reject messages bigger than this |
+| `ConnectionsPerIPPerMinute` | `0` (no limit) | New connections allowed per remote IP per minute |
+| `ConnectionBurstPerIP` | same as per-minute | Token bucket size for the per-IP limit |
 | `ReadBufSize` | `4096` | Size of bufio read buffer |
 | `WriteBufSize` | `4096` | Size of bufio write buffer |
 | `Logger` | no-op | Your logger, must implement `Debug/Info/Warn/Error` |

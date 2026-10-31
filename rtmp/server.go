@@ -22,6 +22,7 @@ type Server struct {
 	wg sync.WaitGroup
 	mu sync.Mutex
 	cc int32
+	rl *connLimiter
 }
 
 func NewServer(cfg Config, h Handler) (*Server, error) {
@@ -33,6 +34,7 @@ func NewServer(cfg Config, h Handler) (*Server, error) {
 	return &Server{
 		cfg: cfg,
 		h:   h,
+		rl:  newConnLimiter(cfg.ConnectionsPerIPPerMinute, cfg.ConnectionBurstPerIP),
 	}, nil
 }
 
@@ -55,6 +57,11 @@ func (s *Server) ListenAndServe() error {
 			return err
 		}
 
+		if !s.rl.allow(cn.RemoteAddr()) {
+			s.cfg.Logger.Warn("connection rate limit reached for %s", cn.RemoteAddr())
+			_ = cn.Close()
+			continue
+		}
 		if s.cfg.MaxConnections > 0 {
 			if atomic.LoadInt32(&s.cc) >= int32(s.cfg.MaxConnections) {
 				s.cfg.Logger.Warn("max connections reached")
@@ -104,22 +111,19 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (s *Server) CloseByStreamKey(key string) int {
-	if key == "" {
-		return 0
+// CloseByID closes the connection with this session id.
+func (s *Server) CloseByID(id string) bool {
+	if id == "" {
+		return false
 	}
-	closed := 0
+	closed := false
 	s.ss.Range(func(_, v any) bool {
 		ss, ok := v.(*session.Session)
-		if !ok {
+		if !ok || ss.ID() != id {
 			return true
 		}
-		if ss.StreamKey() == key {
-			if err := ss.Close(); err == nil {
-				closed++
-			}
-		}
-		return true
+		closed = ss.Close() == nil
+		return false
 	})
 	return closed
 }
